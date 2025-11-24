@@ -1,0 +1,31 @@
+name: Fyers V3 Token Refresh
+
+on:
+  schedule:
+    - cron: "0 * * * *"     # Runs every hour
+  workflow_dispatch:         # Allow manual manual trigger
+
+jobs:
+  refresh-token:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repo
+      uses: actions/checkout@v3
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+
+    - name: Install Dependencies
+      run: |
+        pip install requests python-dotenv
+
+    - name: Run Token Refresh Script
+      env:
+        FYERS_CLIENT_ID: ${{ secrets.FYERS_CLIENT_ID }}
+        FYERS_SECRET_KEY: ${{ secrets.FYERS_SECRET_KEY }}
+        FYERS_REFRESH_TOKEN: ${{ secrets.FYERS_REFRESH_TOKEN }}
+        FYERS_PIN:        ${{ secrets.FYERS_PIN }}
+      run: python refresh_fyers.py
