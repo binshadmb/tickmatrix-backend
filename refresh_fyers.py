@@ -1,88 +1,99 @@
 import os
-import requests
+import json
+import time
 import hashlib
-import base64
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import serialization
+import requests
+from dotenv import load_dotenv
 
-# ---------------------------------------------------
-# READ SECRETS FROM GITHUB
-# ---------------------------------------------------
-CLIENT_ID       = os.getenv("FYERS_CLIENT_ID")
-SECRET_KEY      = os.getenv("FYERS_SECRET_KEY")
-REFRESH_TOKEN   = os.getenv("FYERS_REFRESH_TOKEN")
-PIN             = os.getenv("FYERS_PIN")
-GH_PAT          = os.getenv("GH_PAT")
-REPO            = os.getenv("GITHUB_REPOSITORY")
+# -----------------------------------------------------
+# LOAD SECRETS FROM .env
+# -----------------------------------------------------
+load_dotenv()
 
-# ---------------------------------------------------
-# FYERS V3 TOKEN REFRESH LOGIC
-# ---------------------------------------------------
-app_id_secret = f"{CLIENT_ID}:{SECRET_KEY}"
-appIdHash = hashlib.sha256(app_id_secret.encode("utf-8")).hexdigest()
+CLIENT_ID = os.getenv("FYERS_CLIENT_ID")
+SECRET_KEY = os.getenv("FYERS_SECRET_KEY")
+PIN = os.getenv("FYERS_PIN")
+REFRESH_TOKEN = os.getenv("FYERS_REFRESH_TOKEN")
 
-url = "https://api-t1.fyers.in/api/v3/validate-refresh-token"
+TOKEN_FILE = "fyers_access.json"
 
-payload = {
-    "grant_type": "refresh_token",
-    "appIdHash": appIdHash,
-    "refresh_token": REFRESH_TOKEN,
-    "pin": PIN
-}
+# -----------------------------------------------------
+# GENERATE appIdHash (WITH COLON)   <-- FINAL FORMAT
+# -----------------------------------------------------
+raw = f"{CLIENT_ID}:{SECRET_KEY}"
+appIdHash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-print("🔄 Refreshing access token via Fyers V3...")
+REFRESH_URL = "https://api-t1.fyers.in/api/v3/validate-refresh-token"
 
-res = requests.post(url, json=payload)
-data = res.json()
-print("Fyers Response:", data)
 
-if data.get("s") != "ok":
-    raise Exception("❌ Failed to refresh token. Check PIN / Refresh Token.")
+# -----------------------------------------------------
+# SAVE ACCESS TOKEN
+# -----------------------------------------------------
+def save_access_token(token: str):
+    data = {
+        "access_token": token,
+        "timestamp": int(time.time())
+    }
+    with open(TOKEN_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-new_access_token = data["access_token"]
-print("✅ Access Token Refreshed Successfully")
 
-# ---------------------------------------------------
-# GET GITHUB PUBLIC KEY
-# ---------------------------------------------------
-headers = {
-    "Accept": "application/vnd.github+json",
-    "Authorization": f"Bearer {GH_PAT}"
-}
+# -----------------------------------------------------
+# LOAD ACCESS TOKEN FROM FILE
+# -----------------------------------------------------
+def load_access_token() -> str | None:
+    if not os.path.exists(TOKEN_FILE):
+        return None
 
-key_url = f"https://api.github.com/repos/{REPO}/actions/secrets/public-key"
-key_res = requests.get(key_url, headers=headers).json()
+    with open(TOKEN_FILE, "r") as f:
+        data = json.load(f)
+        return data.get("access_token")
 
-public_key = key_res["key"]
-key_id = key_res["key_id"]
 
-public_key_obj = serialization.load_pem_public_key(
-    base64.b64decode(public_key)
-)
+# -----------------------------------------------------
+# REFRESH TOKEN LOGIC (MAIN FUNCTION)
+# -----------------------------------------------------
+def refresh_access_token() -> str:
+    payload = {
+        "grant_type": "refresh_token",
+        "appIdHash": appIdHash,
+        "refresh_token": REFRESH_TOKEN,
+        "pin": PIN
+    }
 
-encrypted = public_key_obj.encrypt(
-    new_access_token.encode(),
-    padding.PKCS1v15()
-)
+    response = requests.post(REFRESH_URL, json=payload)
+    data = response.json()
 
-encrypted_b64 = base64.b64encode(encrypted).decode()
+    if data.get("s") != "ok":
+        raise Exception(f"FYERS refresh failed: {data}")
 
-# ---------------------------------------------------
-# UPDATE FYERS_ACCESS_TOKEN SECRET
-# ---------------------------------------------------
-update_url = f"https://api.github.com/repos/{REPO}/actions/secrets/FYERS_ACCESS_TOKEN"
+    new_token = data["access_token"]
+    save_access_token(new_token)
+    return new_token
 
-update_body = {
-    "encrypted_value": encrypted_b64,
-    "key_id": key_id
-}
 
-update_res = requests.put(update_url, headers=headers, json=update_body)
+# -----------------------------------------------------
+# PUBLIC FUNCTION — ALWAYS RETURNS VALID ACCESS TOKEN
+# -----------------------------------------------------
+def get_access_token() -> str:
+    """
+    1. Loads existing token (if exists)
+    2. If missing or expired — refreshes automatically
+    3. Returns valid access_token
+    """
 
-print("GitHub Update Response Code:", update_res.status_code)
+    token = load_access_token()
+    if token:
+        return token  
 
-if update_res.status_code in [200, 201]:
-    print("🎉 SUCCESS: FYERS_ACCESS_TOKEN updated inside GitHub.")
-else:
-    print("❌ Failed to update FYERS_ACCESS_TOKEN:", update_res.text)
-    raise SystemExit
+    return refresh_access_token()
+
+
+# -----------------------------------------------------
+# TEST
+# -----------------------------------------------------
+if __name__ == "__main__":
+    print("🔄 Fetching Valid FYERS Access Token...")
+    token = get_access_token()
+    print("\n✔ YOUR ACCESS TOKEN:\n")
+    print(token)
